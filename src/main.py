@@ -1,140 +1,251 @@
 """
 This module takes care of starting the API Server, Loading the DB and Adding the endpoints
 """
+
+import email
+import json
+from ntpath import join
 import os
-from flask import Flask, request, jsonify, url_for, Blueprint
+import re
+from unicodedata import category
+from urllib import response
+from flask import Flask, request, jsonify, url_for
 from flask_migrate import Migrate
 from flask_swagger import swagger
 from flask_cors import CORS
 from utils import APIException, generate_sitemap
 from admin import setup_admin
-from models import db, User, Person, Planet, Favourite
-#from models import P
-
-api = Blueprint("api", __name__)
+from models import Favorito, Personaje, Planeta, db, Usuario
 
 app = Flask(__name__)
 app.url_map.strict_slashes = False
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DB_CONNECTION_STRING')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["JWT_SECRET_KEY"] = os.environ.get('FLASK_APP_KEY')
 MIGRATE = Migrate(app, db)
 db.init_app(app)
 CORS(app)
 setup_admin(app)
 
-# Handle/serialize errors like a JSON object
 @app.errorhandler(APIException)
 def handle_invalid_usage(error):
     return jsonify(error.to_dict()), error.status_code
-
-# generate sitemap with all your endpoints
 @app.route('/')
 def sitemap():
     return generate_sitemap(app)
 
-@app.route('/person', methods=['GET'])
-def get_all_person():
-    persons = Person.query.all()
-    list_all_person = list(map(lambda person: person.serialize(),persons))
-    return jsonify(list_all_person),200
-
-@app.route("/person/<int:person_id>", methods=["GET"])
-def get_person(person_id):
-    person=Person.query.get(person_id)
-
-    if person==None:
-        resp = "This person does not exist"
-    else:
-        resp =person.serialize()
+@app.route('/users')
+def handle_users():
     
-    return jsonify(resp),200
+    users = Usuario.query.all()
+    users = list(map(lambda user: user.serialize(), users))
+    return jsonify(users), 200
 
-@app.route('/planet', methods=['GET'])
-def get_planets_all():
-    planets = Planet.query.all()
-    list_all_planet = list(map(lambda planet: planet.serialize(),planets))
-    return jsonify(list_all_planet),200
+@app.route('/signup', methods = ['POST'])
+def add_user():
+    body = request.json
+    email_2 = body.get("email", None)
+    password = body.get("password", None)
+    nombre = body.get("nombre", None)
+    apellido = body.get("apellido", None)
 
-@app.route("/planet/<int:planet_id>", methods=["GET"])
-def get_planet(planet_id):
-    planet=Planet.query.get(planet_id)
-
-    if planet==None:
-        resp = "This planet does not exist"
+    if email_2 and password and nombre is not None:
+        correo = Usuario.query.filter_by(email = email_2).first()
+        if correo is not None:
+            return jsonify({
+                "msg": "Usuario ya existe"
+            }), 400
+        else:
+            try:
+                new_user = Usuario(
+                    email = email_2,
+                    password = password,
+                    nombre = nombre,
+                    apellido = apellido
+                )
+                db.session.add(new_user)
+                db.session.commit()
+                return "Usuario creado", 201
+            except Exception as error:
+                db.session.rollback()
+                return jsonify(error.args), 500
     else:
-        resp =planet.serialize()
-    
-    return jsonify(resp),200
+        return jsonify({
+            "msg": "Something happened"
+        }), 400
 
-@app.route('/users', methods=['GET'])
-def users():
-    users = User.query.all()
-    list_all_users = list(map(lambda user: user.serialize(),users))
-    return jsonify(list_all_users),200
+@app.route('/login', methods = ['POST'])
+def log_in():
+    body = request.json
+    email_2 = body.get("email", None)
+    password = body.get("password", None)
 
-@app.route('/user/<int:user_id>', methods=['GET'])
-def get_user(user_id):
-    user = User.query.get(user_id)
-    if user == None:
-        resp = "User does not exist"
+    if email_2 and password is not None:
+        correo = Usuario.query.filter_by(email = email_2).first()
+        if correo is not None:
+            contra = Usuario.query.filter_by(password = password).first()
+            if contra is not None:
+                token = create_access_token(identity=email_2)
+                return jsonify({
+                    "email": email_2,
+                    "token": token
+                }), 200
+            else:
+                return jsonify({
+                    "msg":"Contraseña incorrecta"
+                }), 404
+        else:
+            return jsonify({
+                "msg":"Usuario no existe"
+            }), 404
     else:
-        resp = user.serialize()
+        return jsonify({
+            "msg": "Email and Password are necesary"
+        }), 401
 
-    return jsonify(resp),200    
-   
 
-@app.route("/users/favourites/<int:user_id>", methods=["GET"])
-def get_favourites_of_user(user_id):
-    favourites = Favourite.query.get(user_id)
-    if favourites == None:
-        resp = "This user has not favourites"
+@app.route('/people')
+def handle_people():
+
+    people = Personaje.query.all()
+    people = list(map(lambda person: person.serialize(), people))
+    return jsonify(people), 200
+
+@app.route('/people/<int:people_id>')
+def handle_people_id(people_id):
+
+    person = Personaje.query.filter_by(id = people_id).first()
+    if person is not None:
+        return jsonify(person.serialize()), 200
     else:
-        resp = favourites.serialize()
+        return jsonify({
+            "msg": "Not Found"
+        }), 404
 
-    return jsonify(resp),200  
+@app.route('/planets')
+def handle_planets():
 
-@app.route("/favourite/planet/<int:planet_id>", methods = ["POST"])
-def add_planet_favourite(planet_id):
-    body = request.get_json()
-    print(body)
-    new_planet_favourite = Favourite(user_id=body["user_id"], planet_id=body["planet_id"])
-    db.session.add(new_planet_favourite)
-    db.session.commit()
+    planets = Planeta.query.all()
+    planets = list(map(lambda planet: planet.serialize(), planets))
+    return jsonify(planets), 200
 
-    return jsonify("Planet added to favourites"),200
+@app.route('/planets/<int:planet_id>')
+def handle_planets_id(planet_id):
 
-@app.route("/favourite/planet/<int:planet_id>", methods = ["DELETE"])
-def delete_planet_favourite(planet_id):
-    favourite = Favourite.query.get(planet_id)
-    if favourite == None:
-        return ("this favourite does not exist"),200
+    planet = Planeta.query.filter_by(id= planet_id).first()
+    if planet is not None:
+        return jsonify(planet.serialize()), 200
     else:
-        db.session.delete(favourite)
-        db.session.commit()
-        return jsonify("Planet deleted from favourites"),200
+        return jsonify({
+            "msg": "Not Found"
+        }), 404
 
-@app.route("/favourite/person/<int:person_id>", methods = ["POST"])
-def add_person_favourite(person_id):
-    body = request.get_json()
-    new_person_favourite = Favourite(user_id=body["user_id"], person_id=body["person_id"])
-    db.session.add(new_person_favourite)
-    db.session.commit()
-
-    return jsonify("Person added to favourites"),200
-
-@app.route("/favourite/person/<int:person_id>", methods = ["DELETE"])
-def delete_person_favourite(person_id):
-    favourite = Favourite.query.get(person_id)
-    if favourite == None:
-        return ("this favourite does not exist"),200
+@app.route('/favoritos', methods = ['DELETE'])
+def delete_favs():
+    body = request.json
+    user = get_jwt_identity()
+    fav = body.get("fav_name", None)
+    user_id = Usuario.query.filter_by(email = user).first()
+    user_id = user_id.id
+    if fav is not None:
+        fav = Favorito.query.filter_by(name = fav).first()
+        if fav is not None:
+            try:
+                db.session.delete(fav)
+                db.session.commit()
+                return "Eliminado", 200
+            except Exception as error:
+                db.session.rollback()
+                return jsonify(error.args), 500
+        else:
+            return jsonify({
+                "msg": "Favorito no existe"
+            }), 404
     else:
-        db.session.delete(favourite)
-        db.session.commit()   
-        return jsonify("Person deleted from favourites"),200
+        return jsonify({
+            "msg":"Something Happened"
+        }), 400
+
+@app.route('/favoritos', methods = ['GET'])
+def protected():
+    user = get_jwt_identity()
+    user_id = Usuario.query.filter_by(email = user).first()
+    user_id = user_id.id
+    favs = Favorito.query.filter_by(usuario_id = user_id)
+    if favs is not None:
+        favs = list(map(lambda favorito: favorito.serialize(), favs))
+        return jsonify(favs)
+    else:
+        return jsonify({
+            "msg": "No posee favoritos"
+        }), 404
+
+@app.route('/favoritos', methods = ['POST'])
+def add_post ():
+    user = get_jwt_identity()
+    user_id = Usuario.query.filter_by(email = user).first()
+    user_id = user_id.id
+    body = request.json
+    category = body.get("category", None)
+    name = body.get("name", None)
+    if category and name is not None:
+        if category == "planeta":                                          
+            existe_planeta = Planeta.query.filter_by(name = name).first()
+            if existe_planeta is not None:
+                existe_fav = Favorito.query.filter_by(name = name).first()
+                if existe_fav is not None:
+                    return jsonify({
+                        "msg":"Planeta ya esta en favoritos"
+                    })
+                else:
+                    try:
+                        new_fav = Favorito(
+                            usuario_id = user_id,
+                            category = category,
+                            name = name
+                        )
+                        db.session.add(new_fav)
+                        db.session.commit()
+                        return "Agregado", 200
+                    except Exception as error:
+                        db.session.rollback()
+                        return jsonify(error), 500
+            else:
+                return jsonify({
+                    "msg": "Planeta no existe"
+                })
+        if category == "personaje":                                             #AGREGAR PERSONAJE
+            existe_personaje = Personaje.query.filter_by(name = name).first()
+            if existe_personaje is not None:
+                existe_fav = Favorito.query.filter_by(name = name).first()
+                if existe_fav is not None:
+                    return jsonify({
+                        "msg":"Personaje ya esta en favoritos"
+                    })
+                else:
+                    try:
+                        new_fav = Favorito(
+                            usuario_id = user_id,
+                            category = category,
+                            name = name
+                        )
+                        db.session.add(new_fav)
+                        db.session.commit()
+                        return "Agregado", 200
+                    except Exception as error:
+                        db.session.rollback()
+                        return jsonify(error), 500
+            else:
+                return jsonify({
+                    "msg": "Personaje no existe"
+                })
+    else:
+        return jsonify({
+            "msg": "must have a category and a name"
+        }), 401
 
 
 
-# this only runs if `$ python src/main.py` is executed
 if __name__ == '__main__':
     PORT = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    app.run(host='0.0.0.0', port=PORT, debug=True)
